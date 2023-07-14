@@ -160,9 +160,11 @@ __sizeless_struct Gauge{
 
 extern float *ext;
 
-int main(){
+int main(int ac, char **av){
+	int ns = atoi(av[1]);
+
 	float buf [18*16];
-	float spin[6*16];
+	float spin[6*16 * ns];
 
 	for(auto &f : buf ) f = drand48();
 	for(auto &f : spin) f = drand48();
@@ -170,5 +172,5 @@ int main(){
 	Gauge g;
 	g.load(buf);
 	// g.chksum(ext);
-	g.mult(spin, ext);
+	g.mult(spin, ext, ns);
 }
