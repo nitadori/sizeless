@@ -1,18 +1,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <complex>
 #include <arm_sve.h>
 
-__sizeless_struct Gauge{
+__sizeless_struct SVGauge{
 	typedef svfloat32_t vec;
 	svfloat32_t r11, i11, r12, i12, r13, i13;
 	svfloat32_t r21, i21, r22, i22, r23, i23;
 	svfloat32_t r31, i31, r32, i32, r33, i33;
 
-	svbool_t svptrue(svfloat32_t){
+	static svbool_t svptrue(svfloat32_t){
 		return svptrue_b32();
 	}
-	svbool_t svptrue(svfloat64_t){
+	static svbool_t svptrue(svfloat64_t){
 		return svptrue_b64();
 	}
 
@@ -158,19 +159,106 @@ __sizeless_struct Gauge{
 	}
 };
 
-extern float *ext;
+void unpack_cplx(float *dst, const std::complex<float> *src, const int nvec){
+	svfloat32_t tmp;
+	auto  vlen = svlen(tmp);
+	svbool_t pg = SVGauge::svptrue(tmp);
+	for(int i=0; i<nvec; i++){
+		auto v2 = svld2(pg, (const float *)(src) + 2*i*vlen);
+		auto re = svget2(v2, 0);
+		auto im = svget2(v2, 1);
+
+		svst1_vnum(pg, dst + vlen*2*i, 0, re); 
+		svst1_vnum(pg, dst + vlen*2*i, 1, im); 
+	}
+}
+
+void pack_cplx(std::complex<float> *dst, const float *src, const int nvec){
+	svfloat32_t tmp;
+	auto  vlen = svlen(tmp);
+	svbool_t pg = SVGauge::svptrue(tmp);
+	for(int i=0; i<nvec; i++){
+		auto re = svld1_vnum(pg, src + vlen*2*i, 0); 
+		auto im = svld1_vnum(pg, src + vlen*2*i, 1); 
+		auto v2 = svcreate2(re, im);
+
+		svst2(pg, (float *)dst + 2*i*vlen, v2);
+	}
+}
+
+// extern float *ext;
 
 int main(int ac, char **av){
-	int ns = atoi(av[1]);
+	int ns = ac>1 ? atoi(av[1]) : 4;
 
+#if 0
 	float buf [18*16];
 	float spin[6*16 * ns];
 
 	for(auto &f : buf ) f = drand48();
 	for(auto &f : spin) f = drand48();
 
-	Gauge g;
+	SVGauge g;
 	g.load(buf);
 	// g.chksum(ext);
 	g.mult(spin, ext, ns);
+#else
+	svfloat32_t tmp;
+	size_t vlen = svlen(tmp);
+	std::complex<float> gauge[3][3][vlen];
+	std::complex<float> spin[ns][3][vlen];
+	decltype(spin) prod, prod2;
+
+	srand48(334);
+	{
+		float *p = (float *)gauge;
+		int len = sizeof(gauge)/sizeof(float);
+		for(int i=0; i<len; i++) p[i] = drand48();
+	}
+	{
+		float *p = (float *)spin;
+		int len = sizeof(spin)/sizeof(float);
+		for(int i=0; i<len; i++) p[i] = drand48();
+	}
+
+	for(int v=0; v<vlen; v++){
+		for(int s=0; s<ns; s++){
+			for(int i=0; i<3; i++){
+				std::complex<float> sum(0.0f, 0.0f);
+				for(int j=0; j<3; j++){
+					sum += gauge[i][j][v] * spin[s][j][v];
+				}
+				prod[s][i][v] = sum;
+			}
+		}
+	}
+
+	SVGauge g;
+	float svgauge[3*3*vlen*2];
+	float svspin[ns*3*vlen*2];
+	decltype(svspin)svprod;
+
+	unpack_cplx(svgauge, gauge[0][0], 3*3);
+	unpack_cplx(svspin, spin[0][0], ns*3);
+	g.load(svgauge);
+	g.mult(svspin, svprod, ns);
+	pack_cplx(prod2[0][0], svprod, ns*3);
+
+	{
+		float *p1 = (float *)prod;
+		float *p2 = (float *)prod2;
+		int len = sizeof(spin)/sizeof(float);
+		int cnt=0;
+		for(int i=0; i<len; i++){
+			float diff = p2[i] - p1[i];
+			if(fabsf(diff) > 1.e-6){
+				printf("%d : %e\n", i, diff);
+				if(++cnt >= 100){
+					break;
+				}
+			}
+		}
+		if(!cnt) puts("PASS mult");
+	}
+#endif
 }
