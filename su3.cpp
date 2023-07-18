@@ -141,7 +141,6 @@ __sizeless_struct SVGauge{
 		v3i = svmla_x(pg, v3i, r33, tmpi);
 		v3i = svmla_x(pg, v3i, i33, tmpr);
 
-
 		svst1_vnum(pg, vout, 0, v1r);
 		svst1_vnum(pg, vout, 1, v1i);
 		svst1_vnum(pg, vout, 2, v2r);
@@ -153,6 +152,85 @@ __sizeless_struct SVGauge{
 		const auto vlen = svlen(r11);
 		for(int i=0; i<ns; i++){
 			mult(vin, vout);
+			vin  += 6 * vlen;
+			vout += 6 * vlen;
+		}
+	}
+
+	void mdag(const float *vin, float *vout){
+		svbool_t pg = svptrue(r11);
+
+		vec v1r, v1i, v2r, v2i, v3r, v3i;
+		vec tmpr, tmpi;
+
+		// 1st row
+		tmpr = svld1_vnum(pg, vin, 0);
+		tmpi = svld1_vnum(pg, vin, 1);
+
+		v1r = svmul_x(pg,      r11, tmpr);
+		v1r = svmla_x(pg, v1r, i11, tmpi);
+		v1i = svmul_x(pg,      r11, tmpi);
+		v1i = svmls_x(pg, v1i, i11, tmpr);
+
+		v2r = svmul_x(pg,      r12, tmpr);
+		v2r = svmla_x(pg, v2r, i12, tmpi);
+		v2i = svmul_x(pg,      r12, tmpi);
+		v2i = svmls_x(pg, v2i, i12, tmpr);
+
+		v3r = svmul_x(pg,      r13, tmpr);
+		v3r = svmla_x(pg, v3r, i13, tmpi);
+		v3i = svmul_x(pg,      r13, tmpi);
+		v3i = svmls_x(pg, v3i, i13, tmpr);
+
+		// 2nd row
+		tmpr = svld1_vnum(pg, vin, 2);
+		tmpi = svld1_vnum(pg, vin, 3);
+
+		v1r = svmla_x(pg, v1r, r21, tmpr);
+		v1r = svmla_x(pg, v1r, i21, tmpi);
+		v1i = svmla_x(pg, v1i, r21, tmpi);
+		v1i = svmls_x(pg, v1i, i21, tmpr);
+
+		v2r = svmla_x(pg, v2r, r22, tmpr);
+		v2r = svmla_x(pg, v2r, i22, tmpi);
+		v2i = svmla_x(pg, v2i, r22, tmpi);
+		v2i = svmls_x(pg, v2i, i22, tmpr);
+
+		v3r = svmla_x(pg, v3r, r23, tmpr);
+		v3r = svmla_x(pg, v3r, i23, tmpi);
+		v3i = svmla_x(pg, v3i, r23, tmpi);
+		v3i = svmls_x(pg, v3i, i23, tmpr);
+
+		// 3rd row
+		tmpr = svld1_vnum(pg, vin, 4);
+		tmpi = svld1_vnum(pg, vin, 5);
+
+		v1r = svmla_x(pg, v1r, r31, tmpr);
+		v1r = svmla_x(pg, v1r, i31, tmpi);
+		v1i = svmla_x(pg, v1i, r31, tmpi);
+		v1i = svmls_x(pg, v1i, i31, tmpr);
+
+		v2r = svmla_x(pg, v2r, r32, tmpr);
+		v2r = svmla_x(pg, v2r, i32, tmpi);
+		v2i = svmla_x(pg, v2i, r32, tmpi);
+		v2i = svmls_x(pg, v2i, i32, tmpr);
+
+		v3r = svmla_x(pg, v3r, r33, tmpr);
+		v3r = svmla_x(pg, v3r, i33, tmpi);
+		v3i = svmla_x(pg, v3i, r33, tmpi);
+		v3i = svmls_x(pg, v3i, i33, tmpr);
+
+		svst1_vnum(pg, vout, 0, v1r);
+		svst1_vnum(pg, vout, 1, v1i);
+		svst1_vnum(pg, vout, 2, v2r);
+		svst1_vnum(pg, vout, 3, v2i);
+		svst1_vnum(pg, vout, 4, v3r);
+		svst1_vnum(pg, vout, 5, v3i);
+	}
+	void mdag(const float *vin, float *vout, const int ns){
+		const auto vlen = svlen(r11);
+		for(int i=0; i<ns; i++){
+			mdag(vin, vout);
 			vin  += 6 * vlen;
 			vout += 6 * vlen;
 		}
@@ -259,6 +337,42 @@ int main(int ac, char **av){
 			}
 		}
 		if(!cnt) puts("PASS mult");
+	}
+
+	// Dagger
+	for(int v=0; v<vlen; v++){
+		for(int s=0; s<ns; s++){
+			for(int i=0; i<3; i++){
+				std::complex<float> sum(0.0f, 0.0f);
+				for(int j=0; j<3; j++){
+					sum += conj(gauge[j][i][v]) * spin[s][j][v];
+				}
+				prod[s][i][v] = sum;
+			}
+		}
+	}
+
+	// unpack_cplx(svgauge, gauge[0][0], 3*3);
+	// unpack_cplx(svspin, spin[0][0], ns*3);
+	// g.load(svgauge);
+	g.mdag(svspin, svprod, ns);
+	pack_cplx(prod2[0][0], svprod, ns*3);
+
+	{
+		float *p1 = (float *)prod;
+		float *p2 = (float *)prod2;
+		int len = sizeof(spin)/sizeof(float);
+		int cnt=0;
+		for(int i=0; i<len; i++){
+			float diff = p2[i] - p1[i];
+			if(fabsf(diff) > 1.e-6){
+				printf("%d : %e\n", i, diff);
+				if(++cnt >= 192){
+					break;
+				}
+			}
+		}
+		if(!cnt) puts("PASS mdag");
 	}
 #endif
 }
